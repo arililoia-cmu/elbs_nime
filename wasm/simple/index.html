@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Audio Worklet and WebAssembly</title>
+  </head>
+  <body>
+    <script type="module" src="./audio_setup.js"></script>
+    <script type="module">
+import {audio_setup} from "./audio_setup.js";
+import {Logger} from "./logger.js";
+import {audio_init, isAudioWorkletAvailable, audioContext, media_stream}
+    from "./use_audio.js";
+audio_init();
+const logger = new Logger(); 
+
+// Creates a button and its logic. 
+let isFirstClick = true; 
+const eButton = document.createElement('button'); 
+
+// Create status string 
+const status = document.createElement('p'); 
+const text = (isAudioWorkletAvailable ? 
+  'This browser says AudioWorklet is available' : 
+  'This browser does not support Audio Worklet yet.'); 
+status.appendChild(document.createTextNode(text)); 
+
+eButton.textContent = 'START'; 
+eButton.disabled = !isAudioWorkletAvailable; 
+eButton.onclick = (event) => {
+  if (eButton.textContent === 'START') {
+    if (isFirstClick) {
+      audio_setup(audioContext, logger, media_stream); 
+      isFirstClick = false; 
+    }
+    audioContext.resume(); 
+    logger.post('Context resumed.'); 
+    eButton.textContent = 'STOP'; 
+  } else {
+    audioContext.suspend(); 
+    logger.post('Context suspended.'); 
+    eButton.textContent = 'START'; 
+  }
+}; 
+
+const demoDiv = document.getElementById('demo_div'); 
+demoDiv.appendChild(eButton); 
+demoDiv.appendChild(logger.getElement()); 
+demoDiv.appendChild(status); 
+    </script>
+
+    <h1>Audio Worklet and WebAssembly</h1>
+    <div id="demo_div">
+  </body>
+</html>

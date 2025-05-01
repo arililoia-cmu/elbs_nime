@@ -1,0 +1,13 @@
+target/
+out
+test-out
+build
+dist
+*.iws
+*.swp
+*.iml
+*.ipr
+.idea/
+release.properties
+pom.xml.releaseBackup
+.DS_Store

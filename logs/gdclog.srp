@@ -1,0 +1,391 @@
+# gdclog.srp - process log file from GDC
+# 
+# Roger B. Dannenberg
+# November, 2022
+
+require "debug"
+require "string"
+require "readcsv"
+require "statistics"
+require "utils"
+
+// csv row labels:
+TYPE = 0
+ID = 1
+TIME = 2
+BEAT = 3
+ADDR = 5
+
+# /gdc/userinfo fields:
+NAMES = 7   // names
+IDS = 8     // ids
+STATUS = 9  // status
+
+# /gdc/timemap fields:
+TMTIME = 8  // time
+TMBEAT = 9  // beat
+TMTEMPO = 10  // tempo
+
+# /gdc/changemode fields:
+CMBEAT = 7   // beat
+EPOCH = 8    // epoch number
+MODE = 9     // mode number
+CYCLE = 10   // cycle len
+
+#  !_o2/ws/cs/get fields:
+MINRT = 9   // minimum round-trip time
+MAXRT = 10  // maximum round-trip time
+
+# !gdc/hit fields:
+HITID = 7        // sender ID
+MODE_EPOCH = 8   // ?
+DRUM = 9         // drum index and left/right
+HBEAT = 10       // exact beat time
+GAIN = 11        // gain setting
+
+
+def split_on_dots(list, optional convert_to_int, convert_to_bool):
+# split a string into fields using "." as delimiter and return array
+# if convert_to_int, each field is converted to an integer
+# if convert_to_bool, each field is converted from "0" to false, otherwise truea
+    list = string_split(list, ".")
+    if convert_to_int:
+        return [int(x) for x in list]
+    elif convert_to_bool:
+        return [x != "0" for x in list]
+    return list
+
+
+def find_participants(csv):
+# get participants from csv
+# return a dictionary mapping id numbers to dictionaries like:
+#    {name: "rbd", status: t}
+    var p = {}
+    for row in csv:
+        if len(row) > 1 and row[ID] != "":
+            var id = int(row[ID])
+            if not p.get(id):
+                p[id] = {"name": "_unknown_"}
+        if len(row) > 9 and row[ADDR] == "/gdc/userinfo":
+            var names = split_on_dots(row[NAMES])
+            var ids = split_on_dots(row[IDS], t)
+            var status = split_on_dots(row[STATUS], nil, t)
+            // display "fp", names, ids, status
+            for id at i in ids:
+                p[id]['name'] = names[i]
+                p[id]['status'] = status[i]
+    return p
+
+
+def clock_sync(csv, p):
+# estimate round-trip time to each participant in p
+    var stats = {}
+    var maxrt = {}
+    for key in p.keys()
+        stats[key] = Statistics()
+        stats[key].retain = t
+    for row in csv:
+        if (len(row) > 11) and (row[ADDR] == "!_o2/ws/cs/get") and
+           (int(row[MINRT]) != 999):
+            key = int(row[ID])
+            stats[key].point(real(row[MINRT]))
+            maxrt[key] = real(row[MAXRT])
+    print "Network Latency Measurements"
+    print "ID  COUNT  MEDIAN  STDDEV  MAX"
+    for key in p.keys()
+        var s = stats[key]
+        if s.count > 0:
+            var mrt = maxrt[key] * 1000
+            var med = s.get_median() * 1000
+            var std = s.get_stddev() * 1000
+            print pad(key, 4); leftpad(s.count, 5); 
+            print leftpad(round(med), 8);
+            print leftpad(round(std), 8);
+            print leftpad(round(mrt), 5)
+        if std > 100:
+            display "std high", s.data
+    print
+
+
+def hit_extraction(csv):
+# constructs dictionary indexed by participant id (integer)
+# each entry is a list of hits 
+    var beat_min = 1.0e10   // when did beat start?
+    var beat_max = 1.0e10   // when does beat stop?
+    // beats are valid when beat > beat_min and beat < beat_max
+    all_hits = {}
+    for row in csv:
+        if len(row) >= 11 and row[ADDR] == "/gdc/timemap" and 
+           row[TYPE][0] == "S":
+            if real(row[TMTEMPO]) > 0.0:
+                beat_min = real(row[TMBEAT])
+                beat_max = 1.0e10  // don't know when time stops
+            else:
+                beat_max = real(row[TMBEAT])  // time stops on this beat
+        if len(row) >= 11 and row[ADDR] == "!gdc/hit" and
+           row[TYPE][0] == "R" and real(row[HBEAT]) > beat_min and 
+           real(row[HBEAT]) < beat_max:
+            var id = int(row[ID])
+            var hit_list = all_hits.get(id)
+            if not hit_list:
+                hit_list = []
+                all_hits[id] = hit_list
+            hit_list.append(real(row[HBEAT]))
+
+
+def hits_analysis(csv):
+# print statistics on deviation from exact eighths to actual hits
+# by ID
+    print "Hit Timing Separated by ID"
+    print "ID  COUNT   MEAN  STDDEV"
+    for key in all_hits.keys().sort():
+        var hits = all_hits[key]
+        if len(hits) > 1:
+            var stats = Statistics()
+            for hit in hits:
+                var eighths = hit * 2
+                var i = round(eighths)
+                stats.point(eighths - i)  // stats on error relative to eighth time
+            print pad(key, 4);
+            print leftpad(stats.count, 5);
+            print float_format(stats.get_mean(), 2, 7);
+            var stddev = stats.get_stddev()
+            if stddev:
+                print float_format(stddev, 2, 8)
+            else:
+                display "    stddev nil", hits
+    print
+
+
+def tempo_and_epoch_info(csv):
+# print a summary of epoch timing in session
+    print "Tempo and epoch info"
+    for row in csv:
+        if len(row) >= 11 and row[ADDR] == "/gdc/timemap" and
+           row[TYPE][0] == "S":
+            if real(row[TMTEMPO]) > 0.0:
+                print float_format(real(row[TMTIME]), 3, 9); " Beat ";
+                print float_format(real(row[TMBEAT]), 1, 6); " bps "; row[TMTEMPO]
+            else:
+                print float_format(real(row[TMTIME]), 3, 9); " Beat "; 
+                print float_format(real(row[TMBEAT]), 1, 6); " Stop "
+        elif len(row) >= 11 and row[ADDR] == "/gdc/changemode"
+            print "          Beat "; float_format(real(row[CMBEAT]), 1, 6);
+            print " Epoch "; row[EPOCH]; " Mode "; row[MODE]; " Cycle Len "; row[CYCLE]
+    print
+
+
+def get_csv(optional filename):
+# read in and return a CSV log file as a csv data structure. Optional filename
+# or if none, then command_line_arguments[1], is tried first; Then, user
+# is prompted for input.
+    var csv
+    var skip_cmdln = (filename != nil)  // no command line if optional filename
+    while not csv:
+        if not filename and not skip_cmdln and len(command_line_arguments) > 1:
+            filename = command_line_arguments[1]
+            skip_cmdlin = t  // only try command line once
+        elif not filename:
+            print "filename: ";
+            stdout.flush()
+            filename = subseq(stdin.readline(), 0, -1)  // trim newline
+        csv = readcsv(filename, false, true)
+        if type(csv) == 'String':
+            print csv
+            csv = nil
+        if not csv:
+            print "Failed to get CSV from", filename
+            filename = nil
+    print "Got CSV log file from", filename
+    return csv
+
+
+def main():
+# basic analysis -- output is printed to console
+    var csv = get_csv()
+    // print csv
+    participants = find_participants(csv)
+    print "Participants"
+    print "ID  COND  NAME"
+    for key in participants.keys():
+        print pad(key, 7); "T" if participants[key]['status'] else " ";
+        print "  "; participants[key]['name']
+    print
+    clock_sync(csv, participants)
+    hit_extraction(csv)
+    # for key in all_hits.keys():
+    #     print key, all_hits[key]
+    hits_analysis(csv)
+    tempo_and_epoch_info(csv)
+
+
+class Range:
+    var start
+    var end
+
+    def init(s, e):
+        start = s
+        end = e
+
+    def to_string():
+        "<Range " + str(start) + " " + str(end) + ">"
+
+    def contains(x):
+        inrange(x, start, end)
+
+
+class Data:
+    var first
+    var second
+    var third
+    def init(f, s, th): first = f; second = s; third = th
+    def to_string(optional as_array):
+        if as_array:
+            "[" + str(first) + ", " + str(second) +
+            ((", " + str(third)) if third else "") + "]"
+        else:
+            "<Pair " + str(first) + " " + str(second) + " " + str(third) + ">"
+
+
+def get_entrainment_ranges(csv):
+# find ranges of beats starting with a transition from zero to positive
+# tempo and ending with a tempo change (or stop).
+    var ranges = []
+    var start_tempo = 1
+    var start_beat
+    for row in csv:
+        if len(row) >= 11 and row[ADDR] == "/gdc/timemap" and
+           row[TYPE][0] == "S":
+            var tempo = real(row[TMTEMPO])
+            var beat = real(row[TMBEAT])
+            if tempo > 0.0:
+                if start_beat:
+                    if start_beat != beat and start_tempo != tempo:
+                        // end at tempo change
+                        ranges.append(Range(start_beat, beat))
+                        start_beat = nil
+                        start_tempo = nil
+                else:  // range begins at positive tempo
+                    start_beat = beat
+                    start_tempo = tempo
+            else:  // stopped at beat
+                if start_beat:
+                    if start_beat != beat:  // end at stop beat
+                        ranges.append(Range(start_beat, beat))
+                    start_beat = nil
+                    start_tempo = nil
+    return ranges
+
+
+def entrainment_analysis(optional filename):
+# find ranges of beats starting with a transition from zero to positive
+# tempo and ending with a tempo change (or stop). Within these ranges
+# collect hits. For each participant with at least 10 hits, measure 
+# the median absolute error of the first 3 hits and that of next 7 hits. 
+# Print the pairs.
+    // first, read the csv file
+    var csv = get_csv(filename)
+    // find the time ranges
+    var ranges = get_entrainment_ranges(csv)
+    for range in ranges:
+        print range
+    hit_extraction(csv)  // sets all_hits
+    var data = []
+    for key in all_hits.keys().sort():
+        for range in ranges:
+            var hits = [hit for hit in all_hits[key] if range.contains(hit)]
+            if len(hits) >= 10:
+                hits = subseq(hits, 0, 15)
+
+                // compute absolute error between beat and the actual hit
+                // time shifted by mean; also compute sum to get mean
+                var sum = 0
+                for hit at i in hits:
+                    var eighths = hit * 2
+                    var re = round(eighths)
+                    hits[i] = eighths - re
+                    sum = sum + hits[i]
+
+                // compute and subtract off the mean error, convert to abs error
+                var mean = sum / len(hits)
+                for hit at i in hits:
+                    hits[i] = abs(hit - mean)
+
+                // get median abs error of first 3 and next 7 hits
+                var at_start = subseq(hits, 0, 5)
+                var after_start = subseq(hits, 5, 10)
+                var last_5 = nil
+                if len(hits) >= 15:
+                    last_5 = subseq(hits, 10, 15)
+                display "### data ###", key, range, at_start, after_start, last_5
+                data.append(Data(at_start.sort()[2], after_start.sort()[2],
+                                 last_5.sort()[2] if last_5 else nil))
+    for d in data:
+        print d.to_string(t)
+    return data
+
+
+def plot_initialize():
+    gnuplot_curve_started = false
+    gnuplot = Gnuplot("startup.plot", 
+                      xlabel = "first, second, third group of 5 hits",
+                      ylabel = "median error in beats",
+                      font = 14,
+                      key = "off")
+    down_count_1 = 0  // number getting better after first group of 5
+    count_1 = 0       // total data points
+    down_count_2 = 0  // number getting better after second group of 5
+    count_2 = 0       // total data point including a third group
+    down_count_13 = 0  // number of data where 3rd group is better than 1st
+    count_13 = 0      // should be same as count_2
+
+
+def plot_add(d):
+    if gnuplot_curve_started:
+        gnuplot.endcurve()
+        gnuplot_curve_started = false
+    if gnuplot_reject_outliers and (d.first > 0.17 or d.second > 0.17 or
+                                    (d.third and d.third > 0.17)):
+        return
+    gnuplot.newcurve()
+    gnuplot_curve_started = t
+    gnuplot.point(1, d.first)
+    gnuplot.point(2, d.second)
+    if d.second < d.first:
+        down_count_1 = down_count_1 + 1
+    count_1 = count_1 + 1
+    if d.third:
+        gnuplot.point(3, d.third)
+        if d.third < d.second
+            down_count_2 = down_count_2 + 1
+        count_2 = count_2 + 1
+        if d.third < d.first
+            down_count_13 = down_count_13 + 1
+        count_13 = count_13 + 1
+    
+
+def plot_finish():
+    if gnuplot_curve_started:
+        gnuplot.endcurve()
+        gnuplot_curve_started = false
+    gnuplot.endplot()
+    display "counts", down_count_1, count_1, down_count_2, count_2
+    display "      ", down_count_13, count_13
+
+
+def multiple_entrainment_analysis(path, keyword outliers = true):
+    require "gnuplot"
+    gnuplot_reject_outliers = not outliers
+    plot_initialize()
+    var log_files = listdir(path)
+    for p in log_files:
+        if p != "." and p != "..":
+            var data = entrainment_analysis(path + "/" + p)
+            for d in data:
+                plot_add(d)
+    plot_finish()
+
+
+# main()
+# entrainment_analysis()
+multiple_entrainment_analysis(command_line_arguments[1], outliers = false)
