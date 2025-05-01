@@ -1,5 +1,6 @@
 # Exploiting Latency In The Design Of A Networked Music Performance System For Percussive Collective Improvisation
 
+## Setup
 
 Notes on [google cloud host](https://console.cloud.google.com):
 
