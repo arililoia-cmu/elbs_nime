@@ -7,8 +7,8 @@
 echo "Enter your username, as shown in the terminal <username>@instance."
 read first_arg
 username="$first_arg"
-echo "Enter a Google Drive link to a .zip file containing the "gdc-ari_elbs" folder,"
-echo "which holds the contents of the "ari_elbs" branch from the GDC repository."
+echo "Enter a Google Drive link to the \"elbs_main-nime.zip\" file,"
+echo "which you can download from https://github.com/arililoia-cmu/elbs_nime"
 read second_arg
 gdrive_link="$second_arg"
 echo "Enter a password for users to join the server:"
@@ -78,8 +78,8 @@ for google_drive_link in download_files_google_drive_link_list:
   os.system(get_wget_command(get_file_id_from_google_drive_link(google_drive_link[1]),f'{final_dir}/{google_drive_link[0]}'))
 EOF
 
-unzip gdc-main.zip
-mv gdc-ari_elbs gdc-main
+unzip elbs_nime-main
+mv elbs_nime-main gdc-main
 cp -Rp gdc-main/* gdc-main/.gitignore .
 rm -rf gdc-main
 
