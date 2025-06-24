@@ -14,7 +14,9 @@ SSH to instance using a browser pop-up SSH window available in `console.cloud.go
 
 Easiest method: Download repository as .zip and upload to Google Drive. 
 
-Download runscripts/setup_script.sh, SSH to virtual machine, and move setup_script.sh into the home directory of the VM.
+Download runscripts/setup_script.sh, SSH to virtual machine, and move setup_script.sh into the home directory of the VM. 
+
+OR - copy and paste the content of runscripts/setup_script.sh into a new file on the VM
 
 On the command line, enter:  
 
